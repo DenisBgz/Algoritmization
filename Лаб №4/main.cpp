@@ -1,102 +1,128 @@
 ﻿#include <iostream>
 #include <vector>
-#include <thread>
+#include <future>
 #include <chrono>
+#include <random>
 #include <iomanip>
 
 using namespace std;
 using namespace chrono;
 
-int partition(vector<int>& arr, int low, int high) {
-    int pivot = arr[high];
-    int i = low - 1;
+// Разбиение с выбором среднего элемента как pivot
+int partition(vector<int>& arr, int left, int right) {
+    int pivot = arr[left + (right - left) / 2];
+    int i = left;
+    int j = right;
 
-    for (int j = low; j < high; j++) {
-        if (arr[j] <= pivot) {
-            i++;
+    while (i <= j) {
+        while (arr[i] < pivot) i++;
+        while (arr[j] > pivot) j--;
+        if (i <= j) {
             swap(arr[i], arr[j]);
+            i++;
+            j--;
         }
     }
-
-    swap(arr[i + 1], arr[high]);
-    return i + 1;
+    return i;
 }
 
-void quickSort(vector<int>& arr, int low, int high) {
-    if (low < high) {
-        int pi = partition(arr, low, high);
-        quickSort(arr, low, pi - 1);
-        quickSort(arr, pi + 1, high);
-    }
+// Последовательная быстрая сортировка
+void quickSortSequential(vector<int>& arr, int left, int right) {
+    if (left >= right) return;
+
+    int index = partition(arr, left, right);
+    quickSortSequential(arr, left, index - 1);
+    quickSortSequential(arr, index, right);
 }
 
-void parallelQuickSort(vector<int>& arr, int low, int high, int threads) {
-    if (threads <= 1 || high - low < 1000) {
-        quickSort(arr, low, high);
+// Параллельная версия через std::async
+void quickSortParallel(vector<int>& arr, int left, int right, int depth) {
+    if (left >= right) return;
+
+    // Если глубина достигнута — продолжаем последовательно
+    if (depth <= 0 || right - left < 1000) {
+        quickSortSequential(arr, left, right);
         return;
     }
 
-    if (low < high) {
-        int pi = partition(arr, low, high);
-        thread leftThread(parallelQuickSort, ref(arr), low, pi - 1, threads / 2);
-        thread rightThread(parallelQuickSort, ref(arr), pi + 1, high, threads / 2);
-        leftThread.join();
-        rightThread.join();
-    }
+    int index = partition(arr, left, right);
+
+    auto futureLeft = async(launch::async, quickSortParallel,
+                            ref(arr), left, index - 1, depth - 1);
+
+    quickSortParallel(arr, index, right, depth - 1);
+
+    futureLeft.wait();
 }
 
-vector<int> generateArray(int size) {
-    vector<int> arr(size);
-    for (int i = 0; i < size; i++) {
-        arr[i] = rand() % 100000;
-    }
-    return arr;
+// Генерация случайного массива
+vector<int> createRandomArray(int size) {
+    static random_device rd;
+    static mt19937 gen(rd());
+    uniform_int_distribution<> dist(0, 100000);
+
+    vector<int> data(size);
+    for (int& x : data)
+        x = dist(gen);
+
+    return data;
 }
 
 int main() {
     setlocale(LC_ALL, "RU");
     cout << fixed << setprecision(6);
 
-    vector<int> sizes = { 100, 1000, 10000, 20000, 30000, 40000, 50000 };
-    cout << "Размер\t" << "Обычная\t" << "\t" << "2 потока\t" << "4 потока\t" << "8 потоков" << endl;
+    vector<int> sizes = {100, 1000, 10000, 20000, 30000, 40000, 50000};
+
+    cout << "Размер\tОбычная\t\t2 потока\t4 потока\t8 потоков\n";
 
     for (int size : sizes) {
-        double normalTime = 0, time2 = 0, time4 = 0, time8 = 0;
 
-        for (int k = 0; k < 100; k++) {
-            vector<int> base = generateArray(size);
+        double tSeq = 0, t2 = 0, t4 = 0, t8 = 0;
 
-            vector<int> arr1 = base;
+        for (int i = 0; i < 100; ++i) {
+
+            vector<int> base = createRandomArray(size);
+
+            // Обычная
+            auto arr1 = base;
             auto start = high_resolution_clock::now();
-            quickSort(arr1, 0, arr1.size() - 1);
+            quickSortSequential(arr1, 0, arr1.size() - 1);
             auto end = high_resolution_clock::now();
-            normalTime += duration<double>(end - start).count();
+            tSeq += duration<double>(end - start).count();
 
-            vector<int> arr2 = base;
+            // 2 потока (глубина = 1)
+            auto arr2 = base;
             start = high_resolution_clock::now();
-            parallelQuickSort(arr2, 0, arr2.size() - 1, 2);
+            quickSortParallel(arr2, 0, arr2.size() - 1, 1);
             end = high_resolution_clock::now();
-            time2 += duration<double>(end - start).count();
+            t2 += duration<double>(end - start).count();
 
-            vector<int> arr4 = base;
+            // 4 потока (глубина = 2)
+            auto arr4 = base;
             start = high_resolution_clock::now();
-            parallelQuickSort(arr4, 0, arr4.size() - 1, 4);
+            quickSortParallel(arr4, 0, arr4.size() - 1, 2);
             end = high_resolution_clock::now();
-            time4 += duration<double>(end - start).count();
+            t4 += duration<double>(end - start).count();
 
-            vector<int> arr8 = base;
+            // 8 потоков (глубина = 3)
+            auto arr8 = base;
             start = high_resolution_clock::now();
-            parallelQuickSort(arr8, 0, arr8.size() - 1, 8);
+            quickSortParallel(arr8, 0, arr8.size() - 1, 3);
             end = high_resolution_clock::now();
-            time8 += duration<double>(end - start).count();
+            t8 += duration<double>(end - start).count();
         }
 
-        normalTime /= 100.0;
-        time2 /= 100.0;
-        time4 /= 100.0;
-        time8 /= 100.0;
+        tSeq /= 100.0;
+        t2 /= 100.0;
+        t4 /= 100.0;
+        t8 /= 100.0;
 
-        cout << size << "\t" << normalTime << "\t" << time2 << "\t" << time4 << "\t" << time8 << endl;
+        cout << size << "\t"
+             << tSeq << "\t"
+             << t2 << "\t"
+             << t4 << "\t"
+             << t8 << endl;
     }
 
     return 0;
